@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # === Configuration ===
-DISK="/dev/sdX"  # ⚠️ Remplace par ton disque réel (ex: /dev/sda)
+DISK="/dev/sda"
 CRYPT_NAME="cryptlvm"
 VG_NAME="vg0"
 ROOT_SIZE="50G"
@@ -78,6 +78,3 @@ linux /vmlinuz-linux
 initrd /initramfs-linux.img
 options cryptdevice=UUID=$(blkid -s UUID -o value "$LUKS_PART"):cryptlvm root=/dev/$VG_NAME/root rw
 EOF
-
-# === Finalisation ===
-echo "Installation terminée. Redémarre et enlève l'ISO !"
