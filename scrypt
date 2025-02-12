@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# === Configuration ===
+DISK="/dev/sdX"  # ⚠️ Remplace par ton disque réel (ex: /dev/sda)
+CRYPT_NAME="cryptlvm"
+VG_NAME="vg0"
+ROOT_SIZE="50G"
+SWAP_SIZE="2G"
+HOME_SIZE="10G"
+BOOT_PART="/dev/sdX1"
+LUKS_PART="/dev/sdX2"
+MOUNT_POINT="/mnt"
+HOSTNAME="archlinux"
+USERNAME="user"
+PASSWORD="password"
+
+# === Vérification ===
+echo "⚠️ Ce script va effacer toutes les données de $DISK !"
+read -p "Continuer ? (yes/no) " confirm
+if [[ "$confirm" != "yes" ]]; then exit 1; fi
+
+# === Partitionnement ===
+echo "[1/8] Partitionnement du disque..."
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 512MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary 512MiB 100%
+
+# === Formater et chiffrer ===
+echo "[2/8] Chiffrement de la partition avec LUKS..."
+echo -n "$PASSWORD" | cryptsetup luksFormat "$LUKS_PART" --type luks2
+echo -n "$PASSWORD" | cryptsetup open "$LUKS_PART" "$CRYPT_NAME"
+
+# === Création du LVM ===
+echo "[3/8] Création des volumes LVM..."
+pvcreate "/dev/mapper/$CRYPT_NAME"
+vgcreate "$VG_NAME" "/dev/mapper/$CRYPT_NAME"
+lvcreate -L "$ROOT_SIZE" -n root "$VG_NAME"
+lvcreate -L "$SWAP_SIZE" -n swap "$VG_NAME"
+lvcreate -L "$HOME_SIZE" -n home "$VG_NAME"
+
+# === Formatage des partitions ===
+echo "[4/8] Formatage des partitions..."
+mkfs.fat -F32 "$BOOT_PART"
+mkswap "/dev/$VG_NAME/swap"
+mkfs.ext4 "/dev/$VG_NAME/root"
+mkfs.ext4 "/dev/$VG_NAME/home"
+
+# === Montage des partitions ===
+echo "[5/8] Montage des partitions..."
+mount "/dev/$VG_NAME/root" "$MOUNT_POINT"
+mkdir "$MOUNT_POINT/boot"
+mount "$BOOT_PART" "$MOUNT_POINT/boot"
+mkdir "$MOUNT_POINT/home"
+mount "/dev/$VG_NAME/home" "$MOUNT_POINT/home"
+swapon "/dev/$VG_NAME/swap"
+
+# === Installation d'Arch Linux ===
+echo "[6/8] Installation de base..."
+pacstrap "$MOUNT_POINT" base linux linux-firmware lvm2 systemd-boot vim networkmanager
+
+# === Configuration du système ===
+echo "[7/8] Configuration du système..."
+genfstab -U "$MOUNT_POINT" >> "$MOUNT_POINT/etc/fstab"
+arch-chroot "$MOUNT_POINT" ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
+arch-chroot "$MOUNT_POINT" hwclock --systohc
+arch-chroot "$MOUNT_POINT" echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+arch-chroot "$MOUNT_POINT" locale-gen
+arch-chroot "$MOUNT_POINT" echo "$HOSTNAME" > /etc/hostname
+arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
+
+# === Installation de systemd-boot ===
+echo "[8/8] Configuration du bootloader..."
+arch-chroot "$MOUNT_POINT" bootctl install
+cat << EOF > "$MOUNT_POINT/boot/loader/entries/arch.conf"
+title Arch Linux
+linux /vmlinuz-linux
+initrd /initramfs-linux.img
+options cryptdevice=UUID=$(blkid -s UUID -o value "$LUKS_PART"):cryptlvm root=/dev/$VG_NAME/root rw
+EOF
+
+# === Finalisation ===
+echo "Installation terminée. Redémarre et enlève l'ISO !"
